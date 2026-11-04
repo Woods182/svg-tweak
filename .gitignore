@@ -1,0 +1,10 @@
+node_modules/
+tmp/
+output/
+test-results/
+*.log
+*.bak
+.DS_Store
+Thumbs.db
+Desktop.ini
+/ai-config.js
