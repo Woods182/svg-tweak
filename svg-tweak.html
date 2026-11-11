@@ -1110,7 +1110,7 @@ Object.assign(I18N_EN, {
   '清掉 {count} 个无用的定义':'Removed {count} unused definitions', '拆出 {count} 个图形':'Extracted {count} shapes',
   '跳过 {count} 个被引用的组':'Skipped {count} referenced groups', '忽略 {count} 个裁剪/滤镜效果':'Discarded {count} clip/filter effects',
   '透明度已分给子元素 {count} 处':'Distributed opacity to children in {count} places',
-  '仍有 {count} 个组没拆（带裁剪/透明效果，按住 Alt 点 ⤯ 可强制拆开）':'{count} groups retained for clipping/opacity; Alt-click ⤯ to force flatten',
+  '仍有 {count} 个组没拆（带裁剪/透明效果，按住 Alt 点击「拆到底」可强制拆开）':'{count} groups retained for clipping/opacity; hold Alt and click “Flatten groups” to force ungroup',
   '，':', ', '、':', ', '没有可简化的 transform':'No transforms to simplify', '已简化 {count} 个变换':'Simplified {count} transforms',
   '已简化 {count} 个变换，清掉 {cleared} 个无效变换':'Simplified {count} transforms and removed {cleared} empty transforms',
   '已置于最上层':'Brought to front', '已置于最下层':'Sent to back', '已经在最上层了':'Already at the front', '已经在最下层了':'Already at the back',
@@ -3393,8 +3393,8 @@ const KEEP_ATTR_NS = new Set(["http://www.w3.org/1999/xlink", "http://www.w3.org
 /* 把 <ns0:svg>/<ns0:rect> 这类带前缀的元素重建为无前缀的 SVG 元素；
    丢掉 sodipodi/inkscape 私有命名空间的元素与属性 */
 function rebuildNode(node, stats){
-  if (node.nodeType === 3) return document.createTextNode(node.nodeValue);
-  if (node.nodeType === 4) return document.createCDATASection(node.nodeValue);
+  // HTML 文档不支持 CDATA 节点；作为普通文本保留内容。
+  if (node.nodeType === 3 || node.nodeType === 4) return document.createTextNode(node.nodeValue);
   if (node.nodeType !== 1) return null;
   const ns = node.namespaceURI;
   let target = null;
@@ -6002,7 +6002,7 @@ function flattenSelection(all, force){
   if (stats.droppedEffects) msgs.push(['忽略 {count} 个裁剪/滤镜效果', {count:stats.droppedEffects}]);
   if (stats.distributedOpacity) msgs.push(['透明度已分给子元素 {count} 处', {count:stats.distributedOpacity}]);
   const leftG = [...doc.querySelectorAll('g')].filter(g => !g.closest('defs')).length;
-  if (leftG) msgs.push(['仍有 {count} 个组没拆（带裁剪/透明效果，按住 Alt 点 ⤯ 可强制拆开）', {count:leftG}]);
+  if (leftG) msgs.push(['仍有 {count} 个组没拆（带裁剪/透明效果，按住 Alt 点击「拆到底」可强制拆开）', {count:leftG}]);
   showToastParts(msgs, 3800);
 
   state.sel.clear();
@@ -8065,7 +8065,7 @@ function showTidyBar(fresh, languageOnly = false){
     '<button class="tclose" id="tbClose" title="' + uiT('关掉这条提示') + '">✕</button>';
   if (!languageOnly){ bar.classList.add('show'); bar.style.opacity = '1'; }
   // 点按钮：不关条，就地更新（这样两个按钮都能点到）；等没有可做的了才自己消失
-  if ($('tbFlatten')) $('tbFlatten').onclick = () => { flattenSelection(false, false); setTimeout(() => showTidyBar(true), 160); };
+  if ($('tbFlatten')) $('tbFlatten').onclick = (e) => { flattenSelection(false, !!e.altKey); setTimeout(() => showTidyBar(true), 160); };
   if ($('tbSimplify')) $('tbSimplify').onclick = () => { simplifyTransforms(true); setTimeout(() => showTidyBar(true), 260); };
   if ($('tbStripVE')) $('tbStripVE').onclick = () => { stripNonScalingStroke(); setTimeout(() => showTidyBar(true), 260); };
   $('tbClose').onclick = () => hideTidyBar(true);

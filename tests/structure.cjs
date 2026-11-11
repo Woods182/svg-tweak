@@ -70,6 +70,33 @@ withEditor(async ({ evalJS, send }) => {
     check('ungroup styles and child overrides', sameAppearance(before, after), {before, after});
     undo(); check('ungroup undo', !!doc.querySelector('#g'));
     redo(); check('ungroup redo', !doc.querySelector('#g') && sameAppearance(ids.map(appearance), after));
+
+    for (const language of ['zh-CN', 'en']) {
+      setUILanguage(language);
+      for (const buttonId of ['btnFlatten', 'tbFlatten']) {
+        const name = language + ' ' + buttonId;
+        loadSVGText(svg('<g id="effectGroup" opacity=".5"><rect id="first" x="10" y="10" width="40" height="30"/><rect id="second" x="70" y="10" width="40" height="30"/></g>'), 'flatten-effect.svg');
+        showTidyBar(true);
+        const original = doc.innerHTML;
+        const label = $(buttonId).textContent.trim();
+        $(buttonId).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        check(name + ' normal click preserves group opacity', doc.innerHTML === original);
+        const hint = $('toast').textContent;
+        check(name + ' hint names the actual button', hint.includes(label) && hint.includes('Alt') && !hint.includes('⤯') &&
+          (language !== 'en' || !/[\u3400-\u9fff]/.test(hint)), {label, hint});
+        $(buttonId).dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }));
+        check(name + ' Alt-click forces flatten', !doc.querySelector('#effectGroup') &&
+          ['first', 'second'].every(id => {
+            const el = doc.querySelector('#' + id);
+            return el.parentNode === doc && el.getAttribute('opacity') === '0.5';
+          }));
+        undo();
+        check(name + ' undo restores group and effects', doc.innerHTML === original);
+        $(buttonId).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        check(name + ' normal click after undo still preserves effects', doc.innerHTML === original);
+      }
+    }
+    setUILanguage('zh-CN');
     return { checks, errors: window.__auditErrors };
   } + ')()');
   assert.deepEqual(result.errors, []);
@@ -103,5 +130,5 @@ withEditor(async ({ evalJS, send }) => {
   assert(cleanup.normal.empty && cleanup.errorCleanup);
   assert(cleanup.errorToast.includes('test failure'));
   assert.deepEqual(cleanup.errors, []);
-  console.log('PASS: path merging, ungroup styles, ellipse transforms, single-page PDF and print cleanup');
+  console.log('PASS: path merging, ungroup styles, bilingual flatten hints and Alt-click/undo, ellipse transforms, single-page PDF and print cleanup');
 }).catch(e => { console.error(e); process.exitCode = 1; });
