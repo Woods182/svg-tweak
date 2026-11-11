@@ -179,6 +179,21 @@
   #aiScope{font-size:12px;max-width:180px}
   #aiScopeHint{font-size:11px}
   #aiPrompt{display:block;width:100%;min-height:76px;max-height:180px;resize:vertical;font-size:13px;line-height:1.6;padding:8px}
+  #aiComposer.dragover{background:#263b4d;box-shadow:inset 0 0 0 2px var(--accent)}
+  #aiReferenceHint{margin:6px 0 0;color:var(--dim);font-size:11px;line-height:1.55}
+  .aiReferences{display:flex;gap:7px;overflow-x:auto;margin-top:8px;padding:4px 2px 3px;white-space:normal}
+  .aiReferences:empty{display:none}
+  .aiReference{position:relative;flex:none;width:76px}
+  .aiReferenceView{display:block;width:100%;padding:4px;border-radius:6px;text-align:center}
+  .aiReferenceView img{display:block;width:66px;height:48px;object-fit:contain;background:#fff;border-radius:3px}
+  .aiReferenceView span{display:block;margin-top:4px;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .aiReferenceRemove{position:absolute;right:-2px;top:-4px;width:21px;height:21px;padding:0;border-radius:50%;font-size:15px;line-height:1}
+  #aiReferenceViewer{width:min(1000px,calc(100vw - 40px));max-height:calc(100vh - 40px);padding:12px;border:1px solid #52677e;border-radius:9px;background:var(--panel);color:var(--fg)}
+  #aiReferenceViewer[open]{display:flex;flex-direction:column;gap:10px}
+  #aiReferenceViewer::backdrop{background:#000a}
+  #aiReferenceViewer header{display:flex;align-items:center;gap:12px}
+  #aiReferenceTitle{flex:1;min-width:0;font-size:13px;overflow-wrap:anywhere}
+  #aiReferenceImage{display:block;width:100%;min-height:0;max-height:calc(100vh - 115px);object-fit:contain;background:#fff}
   #aiStatus{min-height:32px;font-size:11.5px;line-height:1.55;color:var(--dim);margin-top:7px;overflow-wrap:anywhere}
   #aiStatus.error{color:#ffaaa4}
   #aiProgress{margin-top:10px;padding:9px;border:1px solid #405970;border-radius:6px;background:#202c38;font-size:11.5px}
@@ -755,7 +770,7 @@
       <div class="aiActions"><button class="sm" id="aiTest" type="button">检测连接</button><button class="sm" id="aiSaveConfig" type="button">保存配置</button></div>
       <div class="aiNote" id="aiConnectionStatus" role="status" aria-live="polite"></div>
       <p class="aiNote">网页非空项优先，空项读取同目录 ai-config.js。点击「保存配置」可把当前有效配置（含 Key）写入文件，首次请选择网页同目录的 ai-config.js；本次打开后续保存会写回该文件。Key 不自动存入浏览器，配置文件为明文，请勿分享。</p>
-      <p class="aiNote">SVG、对话和可选截图会发送到配置的服务，服务需允许浏览器跨域请求。</p>
+      <p class="aiNote">SVG、对话、参考图和可选画布截图会发送到配置的服务，服务需允许浏览器跨域请求。</p>
       <p class="aiNote">检测会发送一次极短文本请求，可能产生少量费用；不发送图或聊天，也不验证改图或图片能力。</p>
     </details>
     <div id="aiOriginalBar" hidden><button class="sm" id="aiViewOriginal" data-ai-action="view-original">最初原图 · 查看 / 恢复</button></div>
@@ -764,7 +779,10 @@
       <div id="aiCanvasNote">AI 始终修改当前画布，包含你的手动调整。</div>
       <div id="aiScopeRow"><span>修改范围</span><select id="aiScope"><option value="selection">当前选区</option><option value="document">整张图</option></select><span id="aiScopeHint"></span></div>
       <textarea id="aiPrompt" rows="3" placeholder="例如：把选中的模块改成两个并行分支，保持现有配色和字体。"></textarea>
-      <div class="aiActions"><button class="primary sm" id="aiSend" title="以当前画布为底稿生成候选，不自动替换画布">生成一版</button><button class="sm" id="aiCancel" hidden>停止</button></div>
+      <div id="aiReferences" class="aiReferences" aria-label="本轮参考图"></div>
+      <div class="aiActions"><button class="primary sm" id="aiSend" title="以当前画布为底稿生成候选，不自动替换画布">生成一版</button><button class="sm" id="aiCancel" hidden>停止</button><button class="sm" id="aiAddReference" type="button" title="添加参考图（PNG / JPG / WebP，最多 4 张）">添加参考图</button></div>
+      <input id="aiReferenceInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+      <p id="aiReferenceHint">可拖入 AI 输入区 / 粘贴 · 仅供 AI 参考，不加入画布；需模型支持图片。</p>
       <div id="aiProgress" hidden>
         <div class="aiProgressInfo"><span id="aiProgressLabel"></span><span id="aiElapsed"></span></div>
         <progress id="aiProgressBar" aria-label="正在生成修改预览"></progress>
@@ -774,6 +792,11 @@
     </div>
   </section>
 </main>
+
+<dialog id="aiReferenceViewer" aria-labelledby="aiReferenceTitle">
+  <header><strong id="aiReferenceTitle"></strong><button id="aiReferenceClose" class="sm" type="button">关闭</button></header>
+  <img id="aiReferenceImage" alt="参考图">
+</dialog>
 
 <div id="pdfMask"></div>
 <div id="pdfDlg">
@@ -855,7 +878,10 @@ const I18N_EN = Object.assign(Object.create(null), {
   '附上画布截图（需要模型支持图片）':'Attach canvas screenshot (requires image support)',
   '检测连接':'Test connection', '保存配置':'Save configuration',
   '网页非空项优先，空项读取同目录 ai-config.js。点击「保存配置」可把当前有效配置（含 Key）写入文件，首次请选择网页同目录的 ai-config.js；本次打开后续保存会写回该文件。Key 不自动存入浏览器，配置文件为明文，请勿分享。':'Non-empty fields override ai-config.js in the HTML folder. Save configuration writes the effective settings, including the key, to a file. Choose ai-config.js beside the HTML; later saves in this session reuse that file. Keys are not automatically stored in the browser. The file is plain text: do not share it.',
-  'SVG、对话和可选截图会发送到配置的服务，服务需允许浏览器跨域请求。':'Your SVG, conversation, and optional screenshot are sent to the configured API. The service must allow browser cross-origin requests (CORS).',
+  'SVG、对话、参考图和可选画布截图会发送到配置的服务，服务需允许浏览器跨域请求。':'Your SVG, conversation, reference images, and optional canvas screenshot are sent to the configured API. The service must allow browser cross-origin requests (CORS).',
+  '添加参考图':'Add references', '本轮参考图':'Current reference images', '关闭':'Close',
+  '添加参考图（PNG / JPG / WebP，最多 4 张）':'Add reference images (PNG / JPG / WebP, up to 4)',
+  '可拖入 AI 输入区 / 粘贴 · 仅供 AI 参考，不加入画布；需模型支持图片。':'Drop into the AI input area or paste here · References only, not added to the canvas. Requires image support.',
   '检测会发送一次极短文本请求，可能产生少量费用；不发送图或聊天，也不验证改图或图片能力。':'The connection test sends a short text request and may incur a small charge. It sends no diagram or chat history and does not test editing or image understanding.',
   '最初原图 · 查看 / 恢复':'Original image · View / restore',
   'AI 始终修改当前画布，包含你的手动调整。':'AI always starts from the current canvas, including your manual edits.',
@@ -1168,12 +1194,15 @@ const LIBRARY_STORAGE_KEY = 'svgtweak.shapeLibrary';
 const LIBRARY_MAX_BYTES = 4 * 1024 * 1024, LIBRARY_MAX_SHAPES = 200;
 const MAX_ZOOM = 256, MIN_ZOOM = 0.02;
 const AI_VERSION_LIMIT = 40, AI_VERSION_BYTES = 32 * 1024 * 1024;
+const AI_REFERENCE_LIMIT = 4, AI_REFERENCE_EDGE = 2048;
+const AI_REFERENCE_FILE_BYTES = 20 * 1024 * 1024, AI_REFERENCE_BYTES = 16 * 1024 * 1024;
 const aiState = {
   busy:false, pending:null, messages:[], controller:null, epoch:0,
   hadSelection:null, previewSerial:0, previewMode:'split',
   previewView:{scale:1,x:0,y:0},
   busyKind:'', progressTimer:null, startedAt:0, savingConfig:false, configHandle:null,
-  versions:[], nextVersionId:1, canvasVersionId:null, original:null, previewSources:null
+  versions:[], nextVersionId:1, canvasVersionId:null, original:null, previewSources:null,
+  referenceAssets:new Map(), referenceIds:[], nextReferenceId:1, readingReferences:false
 };
 
 /* ============================ 工具函数 ============================ */
@@ -3129,6 +3158,7 @@ $('txtRot').addEventListener('change', e => {
 /* ============================ 键盘 ============================ */
 window.addEventListener('keydown', e => {
   const t = e.target;
+  if (t && t.closest && t.closest('#aiComposer, #aiReferenceViewer')) return;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
 
   const mod = e.ctrlKey || e.metaKey;
@@ -3309,6 +3339,7 @@ stage.addEventListener('wheel', e => {
 
 let spaceDown = false;
 window.addEventListener('keydown', e => {
+  if (e.target && e.target.closest && e.target.closest('#aiComposer, #aiReferenceViewer')) return;
   if (e.code === 'Space' && !(e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName))){
     spaceDown = true; stage.style.cursor = 'grab';
     if (!state.drag) e.preventDefault();
@@ -8079,6 +8110,18 @@ function refreshCoreLanguage(){
 
 /* ============================ AI 协作：API / 候选修改 ============================ */
 Object.assign(I18N_EN, {
+  '参考图 {number}': 'Reference {number}',
+  '参考图 · {name}': 'Reference · {name}',
+  '参考图 {number}：{name} · {width}×{height}，点击查看': 'Reference {number}: {name} · {width}×{height}. Click to view.',
+  '移除参考图 {number}': 'Remove reference {number}',
+  '参考图仅支持 PNG / JPG / WebP。': 'Reference images must be PNG / JPG / WebP.',
+  '参考图 {name} 超过 20 MiB，请先缩小图片。': 'Reference {name} exceeds 20 MiB. Reduce its size first.',
+  '无法读取参考图 {name}，请使用有效的 PNG / JPG / WebP 图片。': 'Could not read reference {name}. Use a valid PNG / JPG / WebP image.',
+  '每轮最多附上 4 张参考图，请先移除不需要的图片。': 'Attach up to 4 reference images per request. Remove unneeded images first.',
+  '本次对话的参考图已达到约 16 MiB 内存上限，请开启新对话后再添加。': 'Reference images have reached this chat’s approximate 16 MiB memory limit. Start a new chat before adding more.',
+  '正在读取参考图…': 'Reading reference images…',
+  '已附上 {count} 张参考图；生成后会继续保留，直到你移除。': '{count} reference image(s) attached. They stay attached after generation until you remove them.',
+  '新对话会清空本次对话、参考图和全部候选版本（不改变当前画布）。是否继续？': 'Start a new chat and clear this chat, reference images, and all candidate versions? The current canvas will not change.',
   '请填写有效的 API 地址，例如 https://example.com/v1。': 'Enter a valid API URL, such as https://example.com/v1.',
   'API 地址不能包含账号、密码、查询参数或片段，请只填写服务地址。': 'The API URL cannot contain credentials, query parameters, or a fragment. Enter only the service URL.',
   'API 地址必须使用 HTTPS；只有本机 localhost、127.0.0.1 或 ::1 可以使用 HTTP。': 'The API URL must use HTTPS. Only local localhost, 127.0.0.1, or ::1 endpoints may use HTTP.',
@@ -8254,7 +8297,6 @@ Object.assign(I18N_EN, {
   '左图': 'Left',
   '右图': 'Right',
   'AI 版本对比': 'AI version comparison',
-  '新对话会清空本次对话和全部候选版本（不改变当前画布）。是否继续？': 'Start a new chat and clear this chat and all candidate versions? The current canvas will not change.',
   '填写要求，点「生成一版」或按 Ctrl+Enter。AI 始终从当前画布开始改。': 'Enter a request, then generate a version or press Ctrl+Enter. AI always starts from the current canvas.'
 });
 // Keep application-owned messages separate from user text and model responses.
@@ -8395,7 +8437,7 @@ const AIEditCore = (() => {
     'text-decoration dominant-baseline alignment-baseline baseline-shift direction writing-mode white-space ' +
     'shape-rendering text-rendering image-rendering stop-color stop-opacity flood-color flood-opacity ' +
     'clip-path mask filter marker-start marker-mid marker-end vector-effect').split(' '));
-  const attrs = new Set(('id class style transform x y x1 y1 x2 y2 cx cy r rx ry width height dx dy rotate d points ' +
+  const attrs = new Set(('id class aria-label style transform x y x1 y1 x2 y2 cx cy r rx ry width height dx dy rotate d points ' +
     'viewBox preserveAspectRatio href offset gradientUnits gradientTransform spreadMethod fx fy fr ' +
     'patternUnits patternContentUnits patternTransform markerUnits markerWidth markerHeight refX refY orient ' +
     'clipPathUnits maskUnits maskContentUnits filterUnits primitiveUnits in in2 result stdDeviation mode type values ' +
@@ -8716,6 +8758,7 @@ const AIEditCore = (() => {
 
 const AI_EDIT_PROMPT = `你是嵌入 SVG 编辑器的改图助手。用户和你轮流修改同一张图。
 本轮用户消息的 document.xml 是发送时当前画布的真实 SVG，包含用户最新手调。历史只用于理解意图，不能替换本轮画布；只按本轮提供的 SVG 修改。
+如附带图片，canvasScreenshot 标记当前画布截图，references 列出参考图；imageOrder 对应本轮图片的顺序（从 1 开始），number 是用户看到的参考图编号。参考图不是编辑底稿，只按用户要求借鉴画法、配色或布局，不要直接把参考图片作为位图插入。输出仍须是可手调的 SVG 修改。历史中提及的旧参考图不代表本轮附带了那些图片；只依据本轮实际附带的图片判断外观。
 data-ai-key 是仅本轮有效的对象编号；只使用本轮 XML 中的编号，不使用旧对话里的编号。不要改写编号。
 输出一个 JSON 对象，不要 Markdown：{"summary":"简短说明或需要澄清的问题","operations":[...]}。
 只给出必要的修改；未提及的字体、线宽、颜色、布局和图形应保留。无法确定意图时 operations 为 []，用 summary 提问。
@@ -8790,6 +8833,94 @@ function aiVersionBytes(){
   }
   return [...xml].reduce((bytes, value) => bytes + value.length * 2, 0);
 }
+function aiPruneReferenceAssets(){
+  const used = new Set([...aiState.referenceIds, ...aiState.messages.flatMap(message => message.referenceIds || [])]);
+  for (const id of aiState.referenceAssets.keys()) if (!used.has(id)) aiState.referenceAssets.delete(id);
+}
+function aiShowReference(id){
+  const asset = aiState.referenceAssets.get(id);
+  if (!asset) return;
+  uiText('aiReferenceTitle', '参考图 · {name}', {name:asset.name});
+  $('aiReferenceImage').src = asset.dataURL;
+  $('aiReferenceImage').alt = asset.name;
+  if (!$('aiReferenceViewer').open) $('aiReferenceViewer').showModal();
+}
+function aiRenderReferences(target = $('aiReferences'), ids = aiState.referenceIds, editable = true){
+  target.replaceChildren();
+  ids.forEach((id, index) => {
+    const asset = aiState.referenceAssets.get(id);
+    if (!asset) return;
+    const item = document.createElement('div'), view = document.createElement('button');
+    item.className = 'aiReference'; view.className = 'aiReferenceView'; view.type = 'button';
+    view.title = uiT('参考图 {number}：{name} · {width}×{height}，点击查看',
+      {number:index+1,name:asset.name,width:asset.width,height:asset.height});
+    const image = document.createElement('img'), label = document.createElement('span');
+    image.src = asset.dataURL; image.alt = asset.name; image.loading = 'lazy'; image.decoding = 'async';
+    uiText(label, '参考图 {number}', {number:index+1});
+    view.append(image, label); view.onclick = () => aiShowReference(id); item.appendChild(view);
+    if (editable){
+      const remove = document.createElement('button');
+      remove.type = 'button'; remove.className = 'aiReferenceRemove'; remove.textContent = '×';
+      remove.title = uiT('移除参考图 {number}', {number:index+1}); remove.setAttribute('aria-label', remove.title);
+      remove.disabled = aiState.busy || aiState.savingConfig || aiState.readingReferences;
+      remove.onclick = () => aiRemoveReference(id); item.appendChild(remove);
+    }
+    target.appendChild(item);
+  });
+}
+function aiRemoveReference(id){
+  if (aiState.busy || aiState.savingConfig || aiState.readingReferences) return;
+  aiState.referenceIds = aiState.referenceIds.filter(value => value !== id);
+  aiPruneReferenceAssets(); aiRenderReferences(); aiUpdateActions();
+}
+async function aiReadReference(file){
+  if (!/^image\/(png|jpeg|webp)$/i.test(file.type)) throw aiError('参考图仅支持 PNG / JPG / WebP。');
+  if (file.size > AI_REFERENCE_FILE_BYTES) throw aiError('参考图 {name} 超过 20 MiB，请先缩小图片。', {name:file.name});
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+    const ratio = Math.min(1, AI_REFERENCE_EDGE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * ratio));
+    canvas.height = Math.max(1, Math.round(bitmap.height * ratio));
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const dataURL = canvas.toDataURL(file.type, .92);
+    return {name:file.name || 'reference.png', dataURL, width:canvas.width, height:canvas.height};
+  } catch (_) {
+    throw aiError('无法读取参考图 {name}，请使用有效的 PNG / JPG / WebP 图片。', {name:file.name});
+  } finally {
+    if (bitmap) bitmap.close();
+  }
+}
+async function aiAddReferenceFiles(files){
+  files = Array.from(files);
+  if (!files.length || aiState.busy || aiState.savingConfig || aiState.readingReferences) return;
+  const epoch = aiState.epoch;
+  aiState.readingReferences = true; aiUpdateActions(); aiSetStatus('正在读取参考图…');
+  try {
+    if (files.length > AI_REFERENCE_LIMIT) throw aiError('每轮最多附上 4 张参考图，请先移除不需要的图片。');
+    const assets = new Map(aiState.referenceAssets), ids = [...aiState.referenceIds];
+    let nextId = aiState.nextReferenceId;
+    for (const file of files){
+      const decoded = await aiReadReference(file);
+      if (epoch !== aiState.epoch) return;
+      let asset = [...assets.values()].find(value => value.dataURL === decoded.dataURL);
+      if (!asset){ asset = {...decoded,id:nextId++}; assets.set(asset.id, asset); }
+      if (!ids.includes(asset.id)) ids.push(asset.id);
+      if (ids.length > AI_REFERENCE_LIMIT) throw aiError('每轮最多附上 4 张参考图，请先移除不需要的图片。');
+      if ([...assets.values()].reduce((bytes, value) => bytes + value.dataURL.length * 2, 0) > AI_REFERENCE_BYTES){
+        throw aiError('本次对话的参考图已达到约 16 MiB 内存上限，请开启新对话后再添加。');
+      }
+    }
+    aiState.referenceAssets = assets; aiState.referenceIds = ids; aiState.nextReferenceId = nextId;
+    aiRenderReferences();
+    aiSetStatus('已附上 {count} 张参考图；生成后会继续保留，直到你移除。', false, {count:ids.length});
+  } catch (error){
+    if (epoch === aiState.epoch) aiSetStatus(error, true);
+  } finally {
+    if (epoch === aiState.epoch){ aiState.readingReferences = false; aiUpdateActions(); }
+  }
+}
 function aiTrackRestoredVersion(xml){
   const version = aiState.versions.findLast(item => item.result.xml === xml || item.canvasXML === xml);
   const base = aiState.versions.find(item => aiSameXML(item.base.xml, xml))?.base;
@@ -8800,7 +8931,11 @@ function aiVersionHistory(parentId){
   const lineage = new Set();
   for (let version = aiVersion(parentId); version && !lineage.has(version.id); version = aiVersion(version.base.parentId)) lineage.add(version.id);
   return aiState.messages.filter(message => !message.failed && (message.versionId ? lineage.has(message.versionId) : message.parentId === parentId))
-    .slice(-10).map(message => ({role:message.role, content:message.text + (message.versionId ? `\n关联版本：${message.versionId}；本轮以提供的 SVG 为准。` : '')}));
+    .slice(-10).map(message => {
+      const names = (message.referenceIds || []).map(id => aiState.referenceAssets.get(id)?.name).filter(Boolean);
+      return {role:message.role, content:message.text + (message.versionId ? `\n关联版本：${message.versionId}；本轮以提供的 SVG 为准。` : '') +
+        (names.length ? `\n历史参考图名称（本条记录不包含图片内容）：${names.join('、')}` : '')};
+    });
 }
 function aiSelectVersion(id, openPreview = true){
   const version = aiVersion(id);
@@ -8887,6 +9022,10 @@ function aiRenderMessages(scroll = true){
     const content = document.createElement('div');
     content.textContent = message.text;
     item.append(label, content);
+    if (message.referenceIds?.length){
+      const references = document.createElement('div'); references.className = 'aiReferences';
+      aiRenderReferences(references, message.referenceIds, false); item.appendChild(references);
+    }
     if (message.role === 'assistant' && aiVersion(message.versionId)){
       const version = aiVersion(message.versionId), actions = document.createElement('div');
       item.dataset.versionId = version.id; actions.className = 'aiActions';
@@ -8908,10 +9047,13 @@ function aiUpdateElapsed(){
   uiText('aiElapsed', '已等待 {seconds} 秒', {seconds:Math.floor((Date.now() - aiState.startedAt) / 1000)});
 }
 function aiUpdateActions(){
-  const busy = aiState.busy || aiState.savingConfig;
+  const busy = aiState.busy || aiState.savingConfig || aiState.readingReferences;
   $('aiSend').disabled = busy;
   $('aiTest').disabled = busy;
   $('aiSaveConfig').disabled = busy;
+  $('aiAddReference').disabled = busy;
+  $('aiReferenceInput').disabled = busy;
+  for (const button of $('aiReferences').querySelectorAll('.aiReferenceRemove')) button.disabled = busy;
   uiText('aiSaveConfig', aiState.savingConfig ? '保存中…' : '保存配置');
   for (const button of document.querySelectorAll('[data-ai-action]')) button.disabled = busy;
   $('aiUseBefore').disabled = busy || !aiState.previewSources?.before;
@@ -8940,6 +9082,11 @@ function aiResetDocument(clearOriginal = false){
   aiState.pending = null;
   aiState.messages = [];
   aiState.versions = []; aiState.nextVersionId = 1; aiState.canvasVersionId = null;
+  aiState.referenceAssets.clear(); aiState.referenceIds = []; aiState.nextReferenceId = 1; aiState.readingReferences = false;
+  $('aiReferenceInput').value = '';
+  $('aiComposer').classList.remove('dragover');
+  if ($('aiReferenceViewer').open) $('aiReferenceViewer').close();
+  aiRenderReferences();
   if (clearOriginal) aiState.original = null;
   aiState.hadSelection = null;
   aiHidePreview();
@@ -9109,12 +9256,13 @@ async function aiScreenshot(xml, signal){
   }
 }
 async function aiSend(){
-  if (aiState.busy || aiState.savingConfig) return;
+  if (aiState.busy || aiState.savingConfig || aiState.readingReferences) return;
   if (aiState.versions.length >= AI_VERSION_LIMIT || aiVersionBytes() >= AI_VERSION_BYTES){
     aiSetStatus('候选历史已达到 40 版或约 32 MiB 上限。请删除不需要的候选后再生成，已有结果不会自动清除。', true); return;
   }
   const request = $('aiPrompt').value.trim();
   const requestLanguage = uiLanguage;
+  const referenceIds = [...aiState.referenceIds], withScreenshot = $('aiVision').checked;
   if (!request){ aiSetStatus('先写下你希望怎么修改这张图。', true); return; }
   const scope = $('aiScope').value;
   const selectionPaths = [...state.sel].map(nodePathOf).filter(Boolean);
@@ -9134,7 +9282,8 @@ async function aiSend(){
   const base = aiState.versions.find(version => version.base.parentId === parentId && aiSameXML(version.base.xml, baseXML))?.base ||
     (parentId == null && aiSameXML(aiState.original.xml, baseXML) ? aiState.original : {xml:baseXML,parentId});
   const previous = aiState.versions.filter(version => version.base === base && version.request === request &&
-    version.scope === scope && JSON.stringify(version.selectionPaths) === JSON.stringify(selectionPaths)).slice(-5);
+    version.scope === scope && JSON.stringify(version.selectionPaths) === JSON.stringify(selectionPaths) &&
+    JSON.stringify(version.referenceIds || []) === JSON.stringify(referenceIds)).slice(-5);
   let userMessage, message;
   aiSetBusy(true);
   aiSetStatus('正在读取当前画布…');
@@ -9142,13 +9291,21 @@ async function aiSend(){
     const context = aiDocumentContext(baseXML, selectionPaths);
     const history = aiVersionHistory(base.parentId);
     const payload = JSON.stringify({request, document:{...context, scope},
+      canvasScreenshot:withScreenshot ? {imageOrder:1} : undefined,
+      references:referenceIds.length ? referenceIds.map((id,index) => {
+        const asset = aiState.referenceAssets.get(id);
+        return {number:index+1,name:asset.name,width:asset.width,height:asset.height,imageOrder:index+1+(withScreenshot ? 1 : 0)};
+      }) : undefined,
       variation:previous.length ? {instruction:'从这份相同底稿按本轮要求生成另一个不同的可选方案，不叠加其他候选的修改。',
         previous:previous.map(version => version.message.text)} : undefined});
     const content = [{type:'text',text:payload}];
-    aiSetProgress($('aiVision').checked ? '正在整理当前 SVG 与画布截图…' : '正在整理当前 SVG…');
-    if ($('aiVision').checked) content.push({type:'image_url',image_url:{url:await aiScreenshot(baseXML, controller.signal)}});
+    aiSetProgress(withScreenshot ? '正在整理当前 SVG 与画布截图…' : '正在整理当前 SVG…');
+    if (withScreenshot) content.push({type:'image_url',image_url:{url:await aiScreenshot(baseXML, controller.signal)}});
+    // Images are stored once per session. Each request sends only its explicit attachments.
+    if (epoch !== aiState.epoch) return;
+    for (const id of referenceIds) content.push({type:'image_url',image_url:{url:aiState.referenceAssets.get(id).dataURL}});
     if (controller.signal.aborted) throw new DOMException(uiT('已取消'), 'AbortError');
-    userMessage = {role:'user',text:request,parentId:base.parentId,
+    userMessage = {role:'user',text:request,parentId:base.parentId,referenceIds,
       scope:scope === 'selection' ? `当前选区 ${context.selectedKeys.length} 个对象` : '整张图',
       scopeSource:scope === 'selection' ? '当前选区 {count} 个对象' : '整张图', scopeParams:{count:context.selectedKeys.length}};
     aiState.messages.push(userMessage);
@@ -9188,7 +9345,7 @@ async function aiSend(){
     }
     if (epoch !== aiState.epoch || controller.signal.aborted) return;
     message.status = aiSameXML(snapshot(), baseXML) ? '待确认' : '已保留 · 底稿与当前画布不同';
-    const version = {id:aiState.nextVersionId++,base,result,scope,selectionPaths,epoch,message,request};
+    const version = {id:aiState.nextVersionId++,base,result,scope,selectionPaths,epoch,message,request,referenceIds};
     userMessage.versionId = message.versionId = version.id;
     aiState.versions.push(version);
     $('aiSettings').open = false;
@@ -9427,6 +9584,7 @@ function aiRefreshLanguage(){
   uiText('aiScopeHint', state.sel.size ? '已选 {count} 个' : '未选对象', {count:state.sel.size});
   aiRefreshCompareOptions();
   aiRenderMessages(false);
+  aiRenderReferences();
   aiRefreshPreviewText();
   aiUpdateActions();
 }
@@ -9440,11 +9598,41 @@ function aiInit(){
   $('btnAI').onclick = () => aiToggle();
   $('aiClose').onclick = () => aiToggle(false);
   $('aiClearChat').onclick = () => {
-    if (!(aiState.messages.length || aiState.versions.length) || confirm(uiT('新对话会清空本次对话和全部候选版本（不改变当前画布）。是否继续？'))) aiResetDocument();
+    if (!(aiState.messages.length || aiState.versions.length || aiState.referenceIds.length || aiState.readingReferences) ||
+        confirm(uiT('新对话会清空本次对话、参考图和全部候选版本（不改变当前画布）。是否继续？'))) aiResetDocument();
   };
   $('aiTest').onclick = aiTestConnection;
   $('aiSaveConfig').onclick = aiSaveConfig;
   $('aiSend').onclick = aiSend;
+  $('aiAddReference').onclick = () => $('aiReferenceInput').click();
+  $('aiReferenceInput').onchange = event => {
+    aiAddReferenceFiles(event.target.files);
+    event.target.value = '';
+  };
+  $('aiComposer').addEventListener('paste', event => {
+    const files = event.clipboardData && event.clipboardData.files;
+    if (!files?.length) return;
+    event.preventDefault(); event.stopPropagation(); aiAddReferenceFiles(files);
+  });
+  $('aiComposer').addEventListener('dragover', event => {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+    event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy';
+    $('aiComposer').classList.add('dragover');
+  });
+  $('aiComposer').addEventListener('dragleave', event => {
+    if (!$('aiComposer').contains(event.relatedTarget)) $('aiComposer').classList.remove('dragover');
+  });
+  $('aiComposer').addEventListener('drop', event => {
+    const files = event.dataTransfer.files;
+    if (!files.length) return;
+    event.preventDefault(); event.stopPropagation(); $('aiComposer').classList.remove('dragover');
+    aiAddReferenceFiles(files);
+  });
+  $('aiReferenceClose').onclick = () => $('aiReferenceViewer').close();
+  $('aiReferenceViewer').addEventListener('close', () => $('aiReferenceImage').removeAttribute('src'));
+  $('aiReferenceViewer').addEventListener('click', event => {
+    if (event.target === $('aiReferenceViewer')) $('aiReferenceViewer').close();
+  });
   $('aiCancel').onclick = () => { if (aiState.controller) aiState.controller.abort(); };
   $('aiViewOriginal').onclick = aiSelectOriginal;
   $('aiUseBefore').onclick = () => aiAdoptPreview('before');
