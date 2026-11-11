@@ -43,6 +43,12 @@ If your browser cannot write directly to a local file, Save as falls back to a d
 | Place a library shape | Click its card, then click the canvas; press `Esc` to cancel |
 | Navigate an AI preview | Scroll to zoom and drag to pan; both sides stay synchronized |
 
+### Flatten groups into editable shapes
+
+Select a group or symbol and click **Flatten groups** (中文：**拆到底**) to edit its individual shapes directly, without holding Alt. Clear the selection to flatten the whole drawing. Local symbol instances and nested groups are expanded recursively; the operation takes one undo step.
+
+Clipping, masks, filters, group opacity, and nested SVG viewports retain the containers needed to preserve their appearance. These containers no longer group their contents for selection: click or marquee-select the shapes inside, or use `Ctrl+A`. Saving and reopening the SVG preserves this editing behavior. Cyclic and external references are retained and reported.
+
 ## AI collaboration
 
 AI is optional. No API configuration is needed for manual editing. SVG Tweak does not provide a model subscription; any usage charges come from your chosen API provider.

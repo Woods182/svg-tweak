@@ -1084,7 +1084,8 @@ Object.assign(I18N_EN, {
   '清掉 {count} 个无用的定义':'Removed {count} unused definitions', '拆出 {count} 个图形':'Extracted {count} shapes',
   '跳过 {count} 个被引用的组':'Skipped {count} referenced groups', '忽略 {count} 个裁剪/滤镜效果':'Discarded {count} clip/filter effects',
   '透明度已分给子元素 {count} 处':'Distributed opacity to children in {count} places',
-  '仍有 {count} 个组没拆（带裁剪/透明效果，按住 Alt 点 ⤯ 可强制拆开）':'{count} groups retained for clipping/opacity; Alt-click ⤯ to force flatten',
+  '保留 {count} 处外观效果，内部图形可单独编辑':'Preserved {count} appearance effects; individual shapes can be edited',
+  '保留 {count} 个循环或外部引用':'Retained {count} cyclic or external references',
   '，':', ', '、':', ', '没有可简化的 transform':'No transforms to simplify', '已简化 {count} 个变换':'Simplified {count} transforms',
   '已简化 {count} 个变换，清掉 {cleared} 个无效变换':'Simplified {count} transforms and removed {cleared} empty transforms',
   '已置于最上层':'Brought to front', '已置于最下层':'Sent to back', '已经在最上层了':'Already at the front', '已经在最下层了':'Already at the back',
@@ -1219,22 +1220,38 @@ function bboxInRoot(el){
 }
 
 /* ============================ 选中 / 层级 ============================ */
+// 合成外壳只负责保留裁剪、蒙版、滤镜、组透明度或 SVG 视口，不再组合内部图形。
+const EFFECT_SHELL = 'data-svgtweak-effect-shell';
+function isEffectShell(el){
+  return el && (tag(el) === 'g' || tag(el) === 'svg') && el.getAttribute(EFFECT_SHELL) === 'true';
+}
 function topLevelOf(el){
-  let cur = el;
-  while (cur && cur.parentNode && cur.parentNode !== doc) cur = cur.parentNode;
-  return (cur && cur.parentNode === doc && isGraphic(cur)) ? cur : null;
+  let cur = el, hit = null;
+  while (cur && cur !== doc){
+    if (cur.nodeType === 1 && isGraphic(cur) && !isEffectShell(cur)) hit = cur;
+    cur = cur.parentNode;
+  }
+  return cur === doc ? hit : null;
 }
 function nearestGraphic(el){
   let cur = el;
   while (cur && cur !== doc){
     if (tag(cur) === 'tspan') { cur = cur.parentNode; continue; }
-    if (isGraphic(cur)) return cur;
+    if (isGraphic(cur) && !isEffectShell(cur)) return cur;
     cur = cur.parentNode;
   }
   return null;
 }
 function allTopLevel(){
-  return [...doc.children].filter(isGraphic);
+  const out = [];
+  function visit(parent){
+    for (const child of parent.children){
+      if (isEffectShell(child)) visit(child);
+      else if (isGraphic(child)) out.push(child);
+    }
+  }
+  visit(doc);
+  return out;
 }
 function select(els, additive){
   if (!additive) state.sel.clear();
@@ -4550,18 +4567,20 @@ function mergeStyle(parentStyle, ownStyle){
 }
 /* 这些属性是“组效果”，不能平铺到子元素，否则会掉效果 */
 const GROUP_EFFECT = ['clip-path','mask','filter'];
+function hasCssTransform(el){
+  return !!el.style.getPropertyValue('transform') ||
+    (!el.hasAttribute('transform') && getComputedStyle(el).transform !== 'none');
+}
 function hasGroupEffect(g){
-  const has = el => {
-    if (GROUP_EFFECT.some(a => el.hasAttribute(a))) return true;
-    const st = el.getAttribute('style') || '';
-    if (/(clip-path|mask|filter)\s*:/i.test(st)) return true;
-    const m = st.match(/opacity\s*:\s*([\d.]+)/i);
-    if (m && parseFloat(m[1]) < 1) return true;
-    const o = parseFloat(el.getAttribute('opacity'));
-    return isFinite(o) && o < 1;
-  };
-  if (has(g)) return true;
-  return [...g.querySelectorAll('g')].some(has);
+  const style = getComputedStyle(g);
+  return GROUP_EFFECT.some(a => {
+    const value = style.getPropertyValue(a);
+    return value && value !== 'none';
+  }) || parseFloat(style.opacity) < 1 || style.display === 'none' ||
+    style.mixBlendMode !== 'normal' || style.isolation === 'isolate' ||
+    hasCssTransform(g) ||
+    // CSS transform 优先于 transform 属性，不能靠给子元素追加属性来传递父变换。
+    (g.hasAttribute('transform') && [...g.querySelectorAll('*')].some(hasCssTransform));
 }
 
 function ungroupSelection(){
@@ -5668,66 +5687,71 @@ function pruneDefs(){
 
 /* ============================ 展开 <use> 引用 ============================ */
 const XLINK_NS = 'http://www.w3.org/1999/xlink';
+let expandedUseSeq = 0;
 
 function expandUses(scope){
   const root = scope || doc;
-  const uses = [...root.querySelectorAll('use')];
-  const stats = { expanded: 0, missing: 0 };
-  if (!uses.length) return stats;
-  let n = 0;
-  for (const u of uses){
-    if (!u.parentNode) continue;
+  const stats = { expanded:0, missing:0, skipped:0, replacements:new Map() };
+  const targets = new Map([...doc.querySelectorAll('[id]')].map(el => [el.id, el]));
+  function expand(u, ancestors){
+    if (!u.parentNode) return;
     const href = u.getAttribute('href') || u.getAttributeNS(XLINK_NS, 'href') || '';
-    if (!href || href.charAt(0) !== '#') continue;
-    const target = (doc.getElementById && doc.getElementById(href.slice(1)))
-                || document.getElementById(href.slice(1))
-                || doc.querySelector('[id="' + href.slice(1).replace(/"/g, "") + '"]');
-    if (!target){ u.remove(); stats.missing++; continue; }   // 定义不存在 → 画面上本来就是空白
+    if (!href || href.charAt(0) !== '#'){ stats.skipped++; return; }
+    const target = targets.get(href.slice(1));
+    if (!target){ stats.replacements.set(u, null); u.remove(); stats.missing++; return; }
+    if (ancestors.has(target)){ stats.skipped++; return; }
+    const next = new Set(ancestors); next.add(target);
 
     const g = document.createElementNS(SVGNS, 'g');
-    const x = parseFloat(u.getAttribute('x')) || 0;
-    const y = parseFloat(u.getAttribute('y')) || 0;
-    const tr = u.getAttribute('transform');
-    const trs = [];
-    if (tr) trs.push(tr);
-    if (x || y) trs.push('translate(' + fnum(x) + ',' + fnum(y) + ')');
+    // 保留 use 自身的继承样式和组效果；它们属于实例外壳，不覆盖目标自己的样式。
+    for (const a of u.attributes){
+      if (['href','x','y','width','height'].includes(a.localName)) continue;
+      if (a.namespaceURI) g.setAttributeNS(a.namespaceURI, a.name, a.value);
+      else g.setAttribute(a.name, a.value);
+    }
+    const position = document.createElementNS(SVGNS, 'g');
+    const x = u.x.baseVal.value, y = u.y.baseVal.value;
+    if (x || y) position.setAttribute('transform', 'translate(' + x + ' ' + y + ')');
 
     let inner;
     if (tag(target) === 'symbol'){
-      inner = document.createElementNS(SVGNS, 'g');
+      // 用真实 SVG 视口保留 meet/slice/none、百分比尺寸和溢出裁剪。
+      inner = document.createElementNS(SVGNS, 'svg');
       [...target.attributes].forEach(a => {
-        if (['id', 'viewBox', 'preserveAspectRatio'].indexOf(a.name) < 0) inner.setAttribute(a.name, a.value);
+        inner.setAttribute(a.name, a.value);
       });
       [...target.childNodes].forEach(c => inner.appendChild(document.importNode(c, true)));
-      const vb = target.getAttribute('viewBox');
-      const w = parseFloat(u.getAttribute('width'));
-      const h = parseFloat(u.getAttribute('height'));
-      if (vb && isFinite(w) && w > 0 && isFinite(h) && h > 0){
-        const p = vb.trim().split(/[\s,]+/).map(Number);
-        if (p.length === 4 && p[2] > 0 && p[3] > 0){
-          const sx = w / p[2], sy = h / p[3];
-          trs.push('translate(' + fnum(-p[0] * sx) + ',' + fnum(-p[1] * sy) + ') scale(' + fnum(sx) + ',' + fnum(sy) + ')');
-        }
-      }
     } else {
       inner = document.importNode(target, true);
-      if (inner.hasAttribute('id')) inner.removeAttribute('id');
-      inner.querySelectorAll && inner.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
     }
-
-    // use 自身的表现属性会覆盖被引用对象
-    INHERIT_ATTRS.forEach(a => {
-      if (u.hasAttribute(a) && !inner.hasAttribute(a)) inner.setAttribute(a, u.getAttribute(a));
+    if (tag(inner) === 'svg') ['width','height'].forEach(a => {
+      if (u.hasAttribute(a)) inner.setAttribute(a, u.getAttribute(a));
     });
-    const own = inner.getAttribute('transform');
-    const all = trs.join(' ') + (own ? ' ' + own : '');
-    if (all.trim()) inner.setAttribute('transform', all.trim());
-
-    g.appendChild(inner);
+    position.appendChild(inner); g.appendChild(position);
     u.parentNode.replaceChild(g, u);
-    n++;
+    stats.replacements.set(u, g);
+    // 快照展开列表不会进入新克隆，需递归处理符号内的 use；遇环停止。
+    const nested = tag(inner) === 'use' ? [inner] : [...inner.querySelectorAll('use')].filter(isRenderedEl);
+    nested.forEach(child => expand(child, next));
+    // 克隆自己的定义必须有独立 id，且不能移除内部 clip/mask/filter 的引用目标。
+    const ids = new Map();
+    const nodes = [position, ...position.querySelectorAll('*')];
+    for (const el of nodes){
+      if (!el.id) continue;
+      let id;
+      do { id = 'svgtweak-use-' + (++expandedUseSeq); } while (doc.getElementById(id));
+      ids.set(el.id, id); el.id = id;
+    }
+    for (const el of nodes) for (const a of [...el.attributes]){
+      let value = a.value;
+      if (a.localName === 'href' && value[0] === '#' && ids.has(value.slice(1))) value = '#' + ids.get(value.slice(1));
+      value = value.replace(/url\(\s*(['"]?)#([^)'"\s]+)\1\s*\)/g,
+        (raw, quote, id) => ids.has(id) ? 'url(#' + ids.get(id) + ')' : raw);
+      if (value !== a.value) a.value = value;
+    }
+    stats.expanded++;
   }
-  stats.expanded = n;
+  [...root.querySelectorAll('use')].forEach(u => expand(u, new Set()));
   return stats;
 }
 
@@ -5743,252 +5767,92 @@ function referencedIds(){
   return set;
 }
 
-/* 把一组元素摊成叶子：累加 transform / 继承属性，带“组效果”的组原样保留 */
-function walkLeaves(node, trAcc, attrAcc, styleAcc, out){
-  const own = node.getAttribute && node.getAttribute('transform');
-  const trNext = own ? (trAcc ? trAcc + ' ' + own : own) : trAcc;
-  const stNext = mergeStyle(styleAcc, node.getAttribute && node.getAttribute('style'));
-  if (tag(node) === 'g'){
-    if (hasGroupEffect(node)){ out.push(node); return; }  // 保留外壳，不摊平
-    const attrs = Object.assign({}, attrAcc);
-    INHERIT_ATTRS.forEach(a => { if (node.hasAttribute(a)) attrs[a] = node.getAttribute(a); });
-    [...node.childNodes].forEach(c => { if (c.nodeType === 1) walkLeaves(c, trNext, attrs, stNext, out); });
-    return;
-  }
-  if (trNext) node.setAttribute('transform', trNext);
-  Object.keys(attrAcc).forEach(a => { if (!node.hasAttribute(a)) node.setAttribute(a, attrAcc[a]); });
-  if (stNext) node.setAttribute('style', stNext);
-  out.push(node);
-}
-
-/* 拆掉组的“合成效果”（裁剪/遮罩/滤镜/透明度），让它可以被摊平 */
-function stripGroupEffect(g, stats){
-  let done = false;
-  ['clip-path', 'mask', 'filter'].forEach(a => {
-    if (g.hasAttribute(a)){ g.removeAttribute(a); stats.droppedEffects++; done = true; }
-  });
-  // style 里的
-  const st = g.getAttribute('style');
-  if (st && /(clip-path|mask|filter)\s*:/i.test(st)){
-    const cleaned = st.split(';').filter(decl => !/(clip-path|mask|filter)\s*:/i.test(decl)).join(';');
-    if (cleaned.trim()) g.setAttribute('style', cleaned); else g.removeAttribute('style');
-    stats.droppedEffects++; done = true;
-  }
-  // 透明度：分给子元素
-  let op = parseFloat(g.getAttribute('opacity'));
-  if (!isFinite(op) && st) {
-    const m = st.match(/opacity\s*:\s*([\d.]+)/i);
-    if (m) op = parseFloat(m[1]);
-  }
-  if (isFinite(op) && op < 1){
-    [...g.children].forEach(c => {
-      const co = parseFloat(c.getAttribute('opacity'));
-      const cur = isFinite(co) ? co : 1;
-      c.setAttribute('opacity', String(Math.round(op * cur * 1e4) / 1e4));
-    });
-    g.removeAttribute('opacity');
-    if (st) g.setAttribute('style', st.split(';').filter(d => !/opacity\s*:/i.test(d)).join(';'));
-    stats.distributedOpacity++;
-    done = true;
-  }
-  return done;
-}
-
-/* 就地摊平 container 里的组；带组效果的组只拆内部（force=true 时把效果剥掉后也拆） */
-/* ---------- 内嵌 <svg>（svg 套 svg）展开成 <g> ----------
-   x/y/width/height/viewBox/preserveAspectRatio 全部折算成 transform，
-   必要时补一个 clipPath 保持原来的裁剪效果 */
-let clipSeq = 0;
-function nestedSvgTransform(svgEl){
-  const num = (n, d) => { const v = svgEl.getAttribute(n); const f = v === null ? NaN : parseFloat(v); return isFinite(f) ? f : d; };
-  const x = num('x', 0), y = num('y', 0);
-  const w = num('width', 0), h = num('height', 0);
-  const vb = (svgEl.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
-  const hasVb = vb.length === 4 && vb.every(v => isFinite(v)) && vb[2] > 0 && vb[3] > 0;
-  let head = 'translate(' + fnum(x) + ',' + fnum(y) + ')';
-  let clipRect = null;
-  if (hasVb){
-    const vx = vb[0], vy = vb[1], vw = vb[2], vh = vb[3];
-    if (w > 0 && h > 0){
-      const par = (svgEl.getAttribute('preserveAspectRatio') || 'xMidYMid meet').trim();
-      if (par.indexOf('none') === 0){
-        const sx = w / vw, sy = h / vh;
-        head += ' scale(' + fnum(sx) + ',' + fnum(sy) + ') translate(' + fnum(-vx) + ',' + fnum(-vy) + ')';
-      } else {
-        const slice = par.indexOf('slice') >= 0;
-        const sc = slice ? Math.max(w / vw, h / vh) : Math.min(w / vw, h / vh);
-        const align = (par.split(/\s+/)[0] || 'xMidYMid');
-        const fx = align.indexOf('xMin') >= 0 ? 0 : align.indexOf('xMax') >= 0 ? 1 : 0.5;
-        const fy = align.indexOf('YMin') >= 0 ? 0 : align.indexOf('YMax') >= 0 ? 1 : 0.5;
-        const ox = (w - vw * sc) * fx, oy = (h - vh * sc) * fy;
-        head += ' translate(' + fnum(ox) + ',' + fnum(oy) + ') scale(' + fnum(sc) + ') translate(' + fnum(-vx) + ',' + fnum(-vy) + ')';
-      }
-      clipRect = { x: vx, y: vy, w: vw, h: vh };
-    } else {
-      head += ' translate(' + fnum(-vx) + ',' + fnum(-vy) + ')';
-    }
-  } else if (w > 0 && h > 0){
-    clipRect = { x: 0, y: 0, w, h };
-  }
-  return { head, clipRect };
-}
-/* 内容超出视口才需要裁剪（免得给用户凭空加一堆 clipPath） */
-function nestedSvgNeedsClip(svgEl, cr){
-  let bb = null;
-  try { bb = svgEl.getBBox(); } catch(e){ bb = null; }
-  if (!bb || !(bb.width || bb.height)) return null;
-  const e = 0.6;
-  const inside = bb.x >= cr.x - e && bb.y >= cr.y - e &&
-                 bb.x + bb.width <= cr.x + cr.w + e && bb.y + bb.height <= cr.y + cr.h + e;
-  return inside ? null : cr;
-}
-function unwrapNestedSvg(svgEl, container, stats){
-  const info = nestedSvgTransform(svgEl);
-  const ownTr = svgEl.getAttribute('transform');
-  const g = document.createElementNS(SVGNS, 'g');
-  const fullTr = [ownTr, info.head].filter(Boolean).join(' ').trim();
-  if (fullTr) g.setAttribute('transform', fullTr);
-  const gid = svgEl.getAttribute('id');
-  if (gid) g.setAttribute('id', gid);
-  ['style','class','opacity','fill','stroke','stroke-width','font-family','font-size','visibility','color']
-    .forEach(a => { if (svgEl.hasAttribute(a)) g.setAttribute(a, svgEl.getAttribute(a)); });
-
-  let host = g;
-  const needClip = info.clipRect ? nestedSvgNeedsClip(svgEl, info.clipRect) : null;
-  if (needClip){
-    const cr = needClip;
-    const cp = document.createElementNS(SVGNS, 'clipPath');
-    const cid = 'svgtweak-clip-' + (++clipSeq);
-    cp.setAttribute('id', cid);
-    const r = document.createElementNS(SVGNS, 'rect');
-    r.setAttribute('x', fnum(cr.x)); r.setAttribute('y', fnum(cr.y));
-    r.setAttribute('width', fnum(cr.w)); r.setAttribute('height', fnum(cr.h));
-    cp.appendChild(r);
-    let defs = doc.querySelector('defs');
-    if (!defs){ defs = document.createElementNS(SVGNS, 'defs'); doc.insertBefore(defs, doc.firstChild); }
-    defs.appendChild(cp);
-    const inner = document.createElementNS(SVGNS, 'g');
-    inner.setAttribute('clip-path', 'url(#' + cid + ')');
-    g.appendChild(inner);
-    host = inner;
-    stats.clipped = (stats.clipped || 0) + 1;
-  }
-  [...svgEl.childNodes].forEach(n => {
-    if (n.nodeType === 1 && (tag(n) === 'title' || tag(n) === 'desc' || tag(n) === 'metadata')) return;
-    host.appendChild(n);
-  });
-  container.insertBefore(g, svgEl);
-  svgEl.remove();
-  stats.svgUnwrapped = (stats.svgUnwrapped || 0) + 1;
-  return g;
-}
-
-function flattenChildrenInPlace(container, refIds, stats, force){
+/* 普通组真正解开；合成效果及内嵌 SVG 视口保留为可穿透的外观容器。
+   不能把组 opacity/filter 复制给每个子图形：重叠区域会改变颜色，滤镜也会变样。 */
+function flattenChildrenInPlace(container, refIds, stats){
   for (const child of [...container.children]){
     const ct = tag(child);
-    // 内嵌 <svg>：先折算成 <g transform>，再当普通组继续拆
-    if (ct === 'svg' && child !== doc){
-      const g = unwrapNestedSvg(child, container, stats);
-      flattenChildrenInPlace(g, refIds, stats, force);
+    if (ct !== 'g' && ct !== 'svg'){
+      if (isGraphic(child)) stats.leaves.add(child);
       continue;
     }
-    if (ct !== 'g') continue;
     const cid = child.getAttribute('id');
-    if (cid && refIds.has(cid)){ stats.skippedRef++; continue; }
-    if (hasGroupEffect(child)){
-      if (!force || !stripGroupEffect(child, stats)){
-        flattenChildrenInPlace(child, refIds, stats, force);
-        stats.keptEffect++;
-        continue;
-      }
+    if (cid && refIds.has(cid)){ stats.skippedRef.add(child); continue; }
+
+    const keep = ct === 'svg' || hasGroupEffect(child);
+    if (keep){
+      child.setAttribute(EFFECT_SHELL, 'true');
+      stats.effects.add(child);
+      // 保留原视口，避免 viewBox、百分比尺寸和 slice 裁剪在转换时发生变化。
+      if (ct === 'svg') stats.viewports.add(child);
     }
+    flattenChildrenInPlace(child, refIds, stats);
+    if (keep) continue;
 
-    const leaves = [];
-    const rootTr = child.getAttribute('transform');
-    const rootAttrs = {};
-    INHERIT_ATTRS.forEach(a => { if (child.hasAttribute(a)) rootAttrs[a] = child.getAttribute(a); });
-    const rootStyle = child.getAttribute('style') || '';
-    [...child.childNodes].forEach(c => { if (c.nodeType === 1) walkLeaves(c, rootTr || '', rootAttrs, rootStyle, leaves); });
-
-    if (cid && leaves.length && !leaves[0].hasAttribute('id')) leaves[0].setAttribute('id', cid);
-    let anchor = child;
-    leaves.forEach(leaf => { container.insertBefore(leaf, anchor.nextSibling); anchor = leaf; });
+    const parent = child.parentNode;
+    const tr = child.getAttribute('transform');
+    const kids = [...child.children];
+    // 在原层级里读完继承样式，再移出。只补偿发生变化的值，保留子元素自己的覆盖。
+    const appearance = kids.map(n => {
+      const style = getComputedStyle(n);
+      return INHERIT_ATTRS.concat(GROUP_EFFECT, 'opacity','mix-blend-mode','isolation','display')
+        .map(a => [a, style.getPropertyValue(a)]);
+    });
+    kids.forEach((n, index) => {
+      if (tr && n.transform){
+        const own = n.getAttribute('transform');
+        n.setAttribute('transform', own ? tr + ' ' + own : tr);
+      }
+      parent.insertBefore(n, child);
+      const style = getComputedStyle(n);
+      const changed = appearance[index].filter(([a, value]) => value && style.getPropertyValue(a) !== value);
+      changed.forEach(([a, value]) => n.style.setProperty(a, libraryLocalURL(value)));
+    });
     child.remove();
-    stats.leaves += leaves.length;
   }
 }
 
-function flattenSelection(all, force){
-  // 1) 先把 <use> 展开成真实副本（否则被引用的内容拆了就没了）
-  const useStats = expandUses(doc);
-  const pruned = useStats.expanded ? pruneDefs() : 0;
-
-  const refIds = referencedIds();
-  let roots;
-  if (all || !state.sel.size){
-    roots = [...doc.children];
-  } else {
-    roots = [...state.sel];
-  }
-  const groups = roots.filter(el => tag(el) === 'g' || tag(el) === 'svg');
-  const hasNestedSvg = doc.querySelector('svg > svg') || [...doc.querySelectorAll('svg')].some(e => e !== doc);
-  if (!groups.length && !useStats.expanded && !hasNestedSvg){
+function flattenSelection(all){
+  const whole = all || !state.sel.size;
+  const selected = whole ? [...doc.children] : [...state.sel];
+  // 同时选中祖先和后代时只处理祖先；definitions 永远不作为可拆画面。
+  const roots = selected.filter(el => doc.contains(el) && isRenderedEl(el) &&
+    !selected.some(other => other !== el && other.contains(el)));
+  const canFlatten = el => ['g','svg','use'].includes(tag(el)) || !!el.querySelector('g,svg,use');
+  if (!roots.some(canFlatten)){
     showToast('没有可拆的组（先选中组，或什么都不选=拆全图）', 2600);
     return;
   }
 
+  // 引用展开也属于这一步操作，必须先记撤销快照。
   pushUndo();
-  const stats = { leaves: 0, skippedRef: 0, keptEffect: 0, droppedEffects: 0, distributedOpacity: 0 };
-  const container = (all || !state.sel.size) ? doc : (groups[0] && groups[0].parentNode) || doc;
-  if (all || !state.sel.size){
-    for (let pass = 0; pass < 12; pass++){
-      const before = doc.querySelectorAll('g').length + doc.querySelectorAll('svg').length;
-      flattenChildrenInPlace(doc, refIds, stats, force);
-      const after = doc.querySelectorAll('g').length + doc.querySelectorAll('svg').length;
-      if (after === before) break;
-    }
-  } else {
-    // 只拆选中的那几个组
-    for (const g of groups){
-      if (tag(g) === 'svg' && g !== doc){
-        const ng = unwrapNestedSvg(g, g.parentNode, stats);
-        flattenChildrenInPlace(parentProxy(ng), refIds, stats, force);
-        continue;
-      }
-      const fake = { children: [g] };
-      flattenChildrenInPlace(parentProxy(g), refIds, stats, force);
-    }
+  let useCount = 0, missing = 0, skippedUses = 0;
+  const expandedRoots = roots.map(root => {
+    // 让根节点自身为 <use> 时也能展开，而且不碰未选中的对象。
+    const scope = { querySelectorAll: () => tag(root) === 'use' ? [root] : [...root.querySelectorAll('use')].filter(isRenderedEl) };
+    const result = expandUses(scope);
+    useCount += result.expanded; missing += result.missing; skippedUses += result.skipped;
+    return result.replacements.has(root) ? result.replacements.get(root) : root;
+  }).filter(el => el && el.nodeType === 1);
+  const refIds = referencedIds();
+  const stats = {leaves:new Set(), effects:new Set(), viewports:new Set(), skippedRef:new Set()};
+  for (const root of expandedRoots){
+    if (root.parentNode) flattenChildrenInPlace(parentProxy(root), refIds, stats);
   }
-
-  const msgs = [];
-  if (stats.svgUnwrapped) msgs.push(['展开 {count} 个内嵌 <svg>', {count:stats.svgUnwrapped}]);
-  if (stats.clipped) msgs.push(['保留 {count} 处裁剪（内容超出视口）', {count:stats.clipped}]);
-  if (useStats.expanded) msgs.push(['展开 {count} 个 <use>', {count:useStats.expanded}]);
-  if (useStats.missing) msgs.push(['移除 {count} 个空引用', {count:useStats.missing}]);
-  if (pruned) msgs.push(['清掉 {count} 个无用的定义', {count:pruned}]);
-  msgs.push(['拆出 {count} 个图形', {count:stats.leaves}]);
-  if (stats.skippedRef) msgs.push(['跳过 {count} 个被引用的组', {count:stats.skippedRef}]);
-  if (stats.droppedEffects) msgs.push(['忽略 {count} 个裁剪/滤镜效果', {count:stats.droppedEffects}]);
-  if (stats.distributedOpacity) msgs.push(['透明度已分给子元素 {count} 处', {count:stats.distributedOpacity}]);
-  const leftG = [...doc.querySelectorAll('g')].filter(g => !g.closest('defs')).length;
-  if (leftG) msgs.push(['仍有 {count} 个组没拆（带裁剪/透明效果，按住 Alt 点 ⤯ 可强制拆开）', {count:leftG}]);
+  // 留下定义可避免滤镜/渐变之间的间接引用被误删。
+  const msgs = [['拆出 {count} 个图形', {count:stats.leaves.size}]];
+  if (useCount) msgs.push(['展开 {count} 个 <use>', {count:useCount}]);
+  if (missing) msgs.push(['移除 {count} 个空引用', {count:missing}]);
+  if (skippedUses) msgs.push(['保留 {count} 个循环或外部引用', {count:skippedUses}]);
+  if (stats.effects.size) msgs.push(['保留 {count} 处外观效果，内部图形可单独编辑', {count:stats.effects.size}]);
+  if (stats.skippedRef.size) msgs.push(['跳过 {count} 个被引用的组', {count:stats.skippedRef.size}]);
   showToastParts(msgs, 3800);
-
   state.sel.clear();
   syncPanel(); renderHUD();
 }
 
-/* 让“只拆选中组”也能复用同一个函数：返回一个只把该组当成子元素的假容器 */
-function parentProxy(g){
-  const parent = g.parentNode || doc;
-  return {
-    children: [g],
-    insertBefore(node, ref){
-      parent.insertBefore(node, ref);
-      return node;
-    }
-  };
-}
+/* 只把选中根节点当作待拆子元素，不影响它的兄弟节点。 */
+function parentProxy(g){ return { children:[g] }; }
 
 /* ============================ 简化 transform ============================ */
 function simplifyTransforms(all){
@@ -7801,7 +7665,7 @@ $('btnPathSplit').onclick = splitSubpaths;
 $('btnPathMerge').onclick = mergePaths;
 $('btnGroup').onclick = groupSelection;
 $('btnUngroup').onclick = ungroupSelection;
-$('btnFlatten').onclick = (e) => flattenSelection(false, !!(e && e.altKey));
+$('btnFlatten').onclick = () => flattenSelection(false);
 $('btnSimplify').onclick = () => simplifyTransforms(!state.sel.size);  // 不选 = 简化全图（和「拆到底」一致）
 
 /* ============================ 示例 ============================ */
@@ -7913,7 +7777,7 @@ function docStats(){
   let groups = 0, xform = 0, xformMergeable = 0;
   doc.querySelectorAll('g, path, rect, line, polygon, polyline, circle, ellipse, text, image, use').forEach(el => {
     if (typeof isRenderedEl === 'function' && !isRenderedEl(el)) return;
-    if (tag(el) === 'g') groups++;
+    if (tag(el) === 'g' && !isEffectShell(el)) groups++;
     // 统计「变换操作数」而不是「带 transform 的元素数」：
     // 这样点完「简化」数字会真的变小（多个变换合并成 1 个 matrix），否则看着像没生效
     if (el.getAttribute('transform')){
@@ -8511,6 +8375,10 @@ const AIEditCore = (() => {
     if (attr.namespaceURI && ![XLINK, 'http://www.w3.org/XML/1998/namespace'].includes(attr.namespaceURI)) fail('不允许的属性命名空间');
     if (attr.namespaceURI === 'http://www.w3.org/XML/1998/namespace') { if (['space','lang'].includes(name)) return; fail('不允许的 XML 属性'); }
     if (attr.namespaceURI === XLINK && name !== 'href') fail('不允许的 xlink 属性');
+    if (name === EFFECT_SHELL) {
+      if (!['g','svg'].includes(el.localName) || value !== 'true') fail('无效的外观容器标记');
+      return;
+    }
     if (name === 'data-library-shape') {
       if (el.localName !== 'g' || !Object.hasOwn(BUILTIN_LIBRARY_SHAPES, value)) fail('无效的形状库标记');
       return;
