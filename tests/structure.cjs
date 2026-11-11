@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { withEditor } = require('./browser.cjs');
 
 withEditor(async ({ evalJS, send }) => {
-  const result = await evalJS('(' + function () {
+  const result = await evalJS('(' + async function () {
     const checks = [];
     function check(name, ok, details) { checks.push({ name, ok, details }); }
     const svg = content => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 300">' + content + '</svg>';
@@ -64,12 +64,58 @@ withEditor(async ({ evalJS, send }) => {
           ['x','y','w','h'].every(key => Math.abs(a.b[key] - b.b[key]) < 1e-7);
       });
     }
+    const sameSVG = (a, b) => new DOMParser().parseFromString(a, 'image/svg+xml').documentElement.isEqualNode(new DOMParser().parseFromString(b, 'image/svg+xml').documentElement);
+    async function renderedPixels() {
+      const source = cloneDocForOutput();
+      source.setAttribute('width', '500'); source.setAttribute('height', '300');
+      const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(source)], { type: 'image/svg+xml' }));
+      try {
+        const image = new Image(); image.src = url;
+        await image.decode();
+        const canvas = document.createElement('canvas'); canvas.width = 500; canvas.height = 300;
+        const ctx = canvas.getContext('2d'); ctx.drawImage(image, 0, 0);
+        return [...ctx.getImageData(0, 0, 500, 300).data];
+      } finally { URL.revokeObjectURL(url); }
+    }
     const before = ids.map(appearance);
     select([doc.querySelector('#g')]); ungroupSelection();
     const after = ids.map(appearance);
     check('ungroup styles and child overrides', sameAppearance(before, after), {before, after});
     undo(); check('ungroup undo', !!doc.querySelector('#g'));
     redo(); check('ungroup redo', !doc.querySelector('#g') && sameAppearance(ids.map(appearance), after));
+
+    for (const language of ['zh-CN', 'en']) {
+      setUILanguage(language);
+      for (const buttonId of ['btnFlatten', 'tbFlatten']) {
+        const name = language + ' ' + buttonId;
+        loadSVGText(svg('<g id="effectGroup" opacity=".5"><rect id="first" x="10" y="10" width="40" height="30"/><rect id="second" x="35" y="10" width="40" height="30"/></g>'), 'flatten-effect.svg');
+        showTidyBar(true);
+        const original = snapshot(), beforePixels = await renderedPixels();
+        $(buttonId).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        const flattened = snapshot(), afterPixels = await renderedPixels();
+        const leavesSelectable = () => ['first', 'second'].every(id => {
+          const el = doc.querySelector('#' + id);
+          return topLevelOf(el) === el && allTopLevel().includes(el);
+        });
+        check(name + ' normal click makes effect group leaves directly editable', leavesSelectable());
+        check(name + ' preserves overlapping group opacity', !!doc.querySelector('#effectGroup') &&
+          getComputedStyle(doc.querySelector('#effectGroup')).opacity === '0.5' &&
+          beforePixels.every((value, i) => value === afterPixels[i]));
+        const hint = $('toast').textContent;
+        check(name + ' explains preserved effects and direct editing without an Alt workaround',
+          !hint.includes('Alt') && !hint.includes('⤯') &&
+          (language === 'en' ? /individual shapes can be edited/.test(hint) && !/[\u3400-\u9fff]/.test(hint) : hint.includes('内部图形可单独编辑')), {hint});
+        undo();
+        check(name + ' undo restores grouping and effects', sameSVG(snapshot(), original) && topLevelOf(doc.querySelector('#first')) === doc.querySelector('#effectGroup'));
+        redo();
+        check(name + ' redo restores directly editable effect shells', sameSVG(snapshot(), flattened) && leavesSelectable());
+        undo();
+        showTidyBar(true);
+        $(buttonId).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        check(name + ' normal click after undo makes leaves editable again', sameSVG(snapshot(), flattened) && leavesSelectable());
+      }
+    }
+    setUILanguage('zh-CN');
     return { checks, errors: window.__auditErrors };
   } + ')()');
   assert.deepEqual(result.errors, []);
@@ -285,5 +331,5 @@ withEditor(async ({ evalJS, send }) => {
   assert(cleanup.normal.empty && cleanup.errorCleanup);
   assert(cleanup.errorToast.includes('test failure'));
   assert.deepEqual(cleanup.errors, []);
-  console.log('PASS: path merging, ungroup styles, recursive leaf editing with preserved group effects, ellipse transforms, single-page PDF and print cleanup');
+  console.log('PASS: path merging, ungroup styles, bilingual flatten controls, recursive leaf editing with preserved group effects, ellipse transforms, single-page PDF and print cleanup');
 }).catch(e => { console.error(e); process.exitCode = 1; });

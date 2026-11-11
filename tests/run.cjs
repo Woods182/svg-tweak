@@ -1,7 +1,7 @@
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const files = ['io.cjs', 'geometry.cjs', 'text.cjs', 'structure.cjs', 'mos-library.cjs', 'circuit-library.cjs', 'shape-library.cjs', 'shape-library-capture.cjs', 'ai-api.cjs', 'ai-core.cjs', 'ai.cjs', 'ai-versions.cjs', 'ai-preview.cjs', 'i18n.cjs'];
+const files = ['io.cjs', 'geometry.cjs', 'text.cjs', 'structure.cjs', 'mos-library.cjs', 'circuit-library.cjs', 'shape-library.cjs', 'shape-library-capture.cjs', 'ai-api.cjs', 'ai-core.cjs', 'ai.cjs', 'ai-versions.cjs', 'ai-preview.cjs', 'ai-references.cjs', 'i18n.cjs'];
 
 for (const file of files) {
   console.log('\n[test] ' + file);

@@ -14,7 +14,7 @@ The interface supports **English and Simplified Chinese**. Use the language menu
 
 - **Manual editing:** selection, snapping, moving, resizing, rotation, alignment, distribution, grouping, and ungrouping, plus text editing, path-node editing, and image cropping.
 - **Basic drawing:** lines, rectangles, circles, triangles, text, and imported images.
-- **AI collaboration:** edit a selection or the whole diagram, preview before applying, generate multiple candidates, and revisit versions from the chat.
+- **AI collaboration:** edit a selection or the whole diagram, attach reference images for style or drawing guidance, preview before applying, generate multiple candidates, and revisit versions from the chat.
 - **Visual comparison:** side-by-side before/after previews with synchronized zoom and pan, independent of the editor canvas. Switch to a single view or compare different candidates.
 - **Reusable shapes:** built-in NMOS, PMOS, VDD, GND, capacitors, junctions, and non-connecting wire crossovers. Save your own shapes and share libraries as JSON files.
 - **Export:** save editable SVG files or use the browser's print dialog to export a PDF.
@@ -82,6 +82,17 @@ To try variations, leave the canvas unchanged, adjust your prompt, and generate 
 
 Applying a different image adds one undo step. Applying the image already on the canvas does not add an empty undo step. AI chats, candidates, and the original snapshot exist only in the current page session: **they are not included in exported SVGs and do not survive a page refresh.**
 
+### Reference images
+
+Click **Add references**, drop images into the AI input area, or paste a screenshot while the input area is focused. PNG, JPG, and WebP are supported, with up to four images per request. Click a thumbnail to view it, or its × button to remove it from future requests.
+
+Describe what to borrow, for example: “Use reference 1's transistor drawing style and reference 2's colors, but keep the circuit layout and labels.” References do not become canvas objects. The current SVG remains the editing base, and AI still returns editable SVG changes for review.
+
+- References stay attached until removed, so you can adjust your prompt and try several variations without adding them again. Each user message shows the references used for that request, even after you remove them from the input area.
+- **Currently attached references are sent on every generation**, independently of **Attach canvas screenshot**. Older message thumbnails are records, not automatically re-sent images. The model and endpoint must support image input; **Test connection** checks text only. Image requests may cost more and take longer.
+- Images are kept only in page memory and shared between message records, not copied into each candidate or written to disk. Files may be up to 20 MiB each; images larger than 2048 pixels on their longest side are resized. The chat has an approximate 16 MiB reference-image memory budget.
+- Refreshing, opening another diagram, or starting a new chat clears the references along with the AI history. They are not included in exported SVGs.
+
 ## Shape library
 
 Click **Shape library** in the toolbar to open the left panel, select a component, and click the canvas to place it. Built-in symbols include:
@@ -117,12 +128,12 @@ Manual editing does not require uploading your diagram. Before using AI, make su
 | Data | Storage or transmission |
 | --- | --- |
 | Current canvas | Held in page memory; save it manually as SVG. It is not restored after a refresh. |
-| AI chats, candidates, and original snapshot | Held in the current document's page session; cleared on refresh or when another diagram is opened. |
+| AI chats, candidates, original snapshot, and reference images | Held in the current document's page session; cleared on refresh, when another diagram is opened, or when a new chat is started. |
 | Custom shape library | Stored in the current browser's local storage; exportable as JSON. |
 | Interface language, API URL, model, and screenshot preference | Remembered in the current browser's local storage. |
 | API key | Editor input stays in page memory. Saving the configuration writes it to a local plain-text file. It is not stored in browser local storage or exported SVGs. |
 
-Generating a version sends the **entire current SVG**, object information, relevant conversation history, and an optional screenshot directly to your configured API service. Editing only a selection does **not** mean only that selection is uploaded. SVG Tweak does not provide an intermediary server.
+Generating a version sends the **entire current SVG**, object information, relevant conversation history, currently attached reference images, and an optional canvas screenshot directly to your configured API service. Editing only a selection does **not** mean only that selection is uploaded. SVG Tweak does not provide an intermediary server.
 
 To share the app, send `svg-tweak.html` and let the recipient enter their own API settings. Include an exported shape-library JSON file if needed. Do not include your actual `ai-config.js`.
 

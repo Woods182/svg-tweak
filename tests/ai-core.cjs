@@ -126,6 +126,34 @@ withEditor(async ({evalJS}) => {
     check(new Set([root,...root.querySelectorAll('*')].map(e=>e.getAttribute('data-ai-key'))).size===1+root.querySelectorAll('*').length,'keys not unique');
     results.push('stable request-copy labels and selected paths');
 
+    const ariaLabel='电路模块 "8→4→4" & 彩色节点', ariaLabelXML='电路模块 &quot;8→4→4&quot; &amp; 彩色节点';
+    const ariaGroup='<g id="aria-module" aria-label="'+ariaLabelXML+'"><rect x="10" y="10" width="70" height="30" fill="#4a8096"/><text x="15" y="30" font-size="12">Editable module</text></g>';
+    const ariaWhole='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 90" aria-label="'+ariaLabelXML+'">'+ariaGroup+'</svg>';
+    const preparedAria=C.prepareSVG(ariaWhole);
+    check(preparedAria.getAttribute('aria-label')===ariaLabel && preparedAria.querySelector('g').getAttribute('aria-label')===ariaLabel,'static preparation lost or changed aria-label text');
+    const ariaCandidates=[];
+    for(const mode of ['insert','replace','document']) {
+      const operation=mode==='insert' ? {op:'insert',target:'root',position:'append',svg:ariaGroup} :
+        {op:'replace',target:mode==='document'?'root':key('rect'),svg:mode==='document'?ariaWhole:ariaGroup};
+      const candidate=await build(labeled.xml,[operation]), candidateRoot=parse(candidate.xml);
+      const group=candidateRoot.querySelector('#aria-module');
+      check(group && group.getAttribute('aria-label')===ariaLabel,mode+' lost or changed escaped aria-label text');
+      check(group.querySelector('text').textContent==='Editable module' && !group.querySelector('image'),'aria-label changed editable content');
+      if(mode==='document') check(candidateRoot.getAttribute('aria-label')===ariaLabel,'whole-root replacement lost root aria-label');
+      ariaCandidates.push(candidate.xml);
+    }
+    check(snapshot()===initial && frames()===baseFrames && !document.contains(preparedAria),'aria-label preparation/preview changed the canvas or leaked a frame');
+    results.push('aria-label with Chinese, quotes and ampersand survives static preparation and generated insert/local/root replacement without changing the canvas');
+    for(const svg of [
+      '<g aria-label="module" onload="parent.__ariaInjected=true"/>',
+      '<g aria-label="module"><script>parent.__ariaInjected=true</script></g>',
+      '<g aria-label="module"><image href="https://example.invalid/module.png" width="10" height="10"/></g>',
+      '<g aria-label="module" aria-labelledby="unknown-title"/>',
+      '<g aria-label="module" data-arbitrary="value"/>'
+    ]) await rejects(labeled.xml,[{op:'insert',target:'root',position:'append',svg}]);
+    check(typeof window.__ariaInjected==='undefined','rejected aria-label fragment executed an event or script');
+    results.push('aria-label allowance stays exact: events, scripts, external resources, other aria-* and unknown attributes remain rejected');
+
     const overflowStyled=await build(labeled.xml,[{op:'style',targets:[key('group')],properties:{overflow:'visible'}}]);
     check(parse(overflowStyled.xml).querySelector('#group').style.overflow==='visible','overflow style operation failed');
     await rejects(labeled.xml,[{op:'style',targets:[key('group')],properties:{overflow:'invalid'}}]);
@@ -388,6 +416,14 @@ withEditor(async ({evalJS}) => {
     }
     check(frames()===baseFrames,'MOS regression leaked a sandbox iframe');
     results.push('all six MOS insert/replace/document candidates adopt and export with metadata/native geometry intact, and undo cleanly');
+    const beforeAriaAdopt=snapshot(), ariaUndoCount=state.undo.length;
+    check(aiUseSnapshot({xml:ariaCandidates.at(-1),label:'Accessibility regression',parentId:null,safeXML:beforeAriaAdopt}),'aria-label candidate adoption failed');
+    for(const candidate of [doc,parse(buildSVGString())]) {
+      check(candidate.getAttribute('aria-label')===ariaLabel && candidate.querySelector('#aria-module').getAttribute('aria-label')===ariaLabel,'adoption/export lost root or group aria-label');
+    }
+    check(state.undo.length===ariaUndoCount+1,'aria-label candidate did not add exactly one undo step');
+    undo(); check(parse(snapshot()).isEqualNode(parse(beforeAriaAdopt)),'aria-label candidate adoption cannot be undone');
+    results.push('aria-label candidate adopts and exports with exact metadata, and restores the previous drawing in one undo');
     return {ok:true,tests:results};
   };
   console.log(JSON.stringify(await evalJS('('+run.toString()+')()'),null,2));
